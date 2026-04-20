@@ -2,10 +2,16 @@ import { useMemo, useState } from 'react'
 
 const MIN_CYCLE_LENGTH = 15
 const MAX_CYCLE_LENGTH = 90
+const PERIOD_DURATION_DAYS = 5
 const DAY_IN_MS = 24 * 60 * 60 * 1000
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 function addDays(date, days) {
   return new Date(date.getTime() + days * DAY_IN_MS)
+}
+
+function startOfMonth(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1))
 }
 
 function formatDate(date) {
@@ -15,6 +21,18 @@ function formatDate(date) {
     day: 'numeric',
     timeZone: 'UTC',
   }).format(date)
+}
+
+function formatMonth(date) {
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'long',
+    timeZone: 'UTC',
+  }).format(date)
+}
+
+function dateToIso(date) {
+  return date.toISOString().split('T')[0]
 }
 
 function parseIsoDate(dateString) {
@@ -62,10 +80,57 @@ function validateInputs(lastPeriodDate, cycleLength) {
   }
 }
 
+function getMonthGrid(monthDate) {
+  const monthStart = startOfMonth(monthDate)
+  const firstGridDate = addDays(monthStart, -monthStart.getUTCDay())
+
+  return Array.from({ length: 42 }, (_, index) => addDays(firstGridDate, index))
+}
+
+function getPredictionMap(lastPeriodStart, cycleLength, displayedMonth) {
+  const monthStart = startOfMonth(displayedMonth)
+  const monthEnd = new Date(Date.UTC(displayedMonth.getUTCFullYear(), displayedMonth.getUTCMonth() + 1, 0))
+  const rangeStart = addDays(monthStart, -45)
+  const rangeEnd = addDays(monthEnd, 45)
+  const typeByDate = new Map()
+
+  let cursor = new Date(lastPeriodStart)
+
+  while (cursor <= rangeEnd) {
+    const periodStart = new Date(cursor)
+    const periodEnd = addDays(periodStart, PERIOD_DURATION_DAYS - 1)
+
+    for (let i = 0; i < PERIOD_DURATION_DAYS; i += 1) {
+      const day = addDays(periodStart, i)
+      if (day >= rangeStart && day <= rangeEnd) {
+        typeByDate.set(dateToIso(day), 'period')
+      }
+    }
+
+    const ovulationDate = addDays(addDays(periodStart, cycleLength), -14)
+    for (let i = -3; i <= 3; i += 1) {
+      const day = addDays(ovulationDate, i)
+      const iso = dateToIso(day)
+      if (day >= rangeStart && day <= rangeEnd && typeByDate.get(iso) !== 'period') {
+        typeByDate.set(iso, 'fertile')
+      }
+    }
+
+    cursor = addDays(cursor, cycleLength)
+    if (periodEnd > rangeEnd) {
+      break
+    }
+  }
+
+  return typeByDate
+}
+
 export default function PeriodTracker() {
   const [lastPeriodDate, setLastPeriodDate] = useState('')
   const [cycleLength, setCycleLength] = useState('28')
   const [isSubmitted, setIsSubmitted] = useState(false)
+  const [displayedMonth, setDisplayedMonth] = useState(startOfMonth(new Date()))
+  const [selectedDateIso, setSelectedDateIso] = useState(null)
 
   const { errors, results } = useMemo(() => {
     if (!isSubmitted) {
@@ -91,6 +156,7 @@ export default function PeriodTracker() {
     const ovulationDate = addDays(nextPeriodDate, -14)
     const fertileWindowStart = addDays(ovulationDate, -3)
     const fertileWindowEnd = addDays(ovulationDate, 3)
+    const predictionMap = getPredictionMap(parsedLastDate, normalizedCycleLength, displayedMonth)
 
     return {
       errors: [],
@@ -99,13 +165,25 @@ export default function PeriodTracker() {
         ovulationDate,
         fertileWindowStart,
         fertileWindowEnd,
+        predictionMap,
       },
     }
-  }, [isSubmitted, lastPeriodDate, cycleLength])
+  }, [isSubmitted, lastPeriodDate, cycleLength, displayedMonth])
+
+  const monthDays = useMemo(() => getMonthGrid(displayedMonth), [displayedMonth])
+  const selectedDate = selectedDateIso ? parseIsoDate(selectedDateIso) : null
+  const selectedDateType = selectedDateIso && results ? results.predictionMap.get(selectedDateIso) : null
 
   function onSubmit(event) {
     event.preventDefault()
     setIsSubmitted(true)
+    setSelectedDateIso(null)
+  }
+
+  function moveMonth(offset) {
+    setDisplayedMonth((current) =>
+      startOfMonth(new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() + offset, 1))),
+    )
   }
 
   return (
@@ -162,24 +240,112 @@ export default function PeriodTracker() {
       )}
 
       {results && (
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
-          <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Next period date</p>
-            <p className="mt-1 text-base font-semibold text-slate-900">{formatDate(results.nextPeriodDate)}</p>
-          </article>
+        <>
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Next period date</p>
+              <p className="mt-1 text-base font-semibold text-slate-900">{formatDate(results.nextPeriodDate)}</p>
+            </article>
 
-          <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Estimated ovulation</p>
-            <p className="mt-1 text-base font-semibold text-slate-900">{formatDate(results.ovulationDate)}</p>
-          </article>
+            <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Estimated ovulation</p>
+              <p className="mt-1 text-base font-semibold text-slate-900">{formatDate(results.ovulationDate)}</p>
+            </article>
 
-          <article className="rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Fertile window</p>
-            <p className="mt-1 text-base font-semibold text-slate-900">
-              {formatDate(results.fertileWindowStart)} - {formatDate(results.fertileWindowEnd)}
-            </p>
-          </article>
-        </div>
+            <article className="rounded-lg border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+              <p className="text-xs uppercase tracking-wide text-slate-500">Fertile window</p>
+              <p className="mt-1 text-base font-semibold text-slate-900">
+                {formatDate(results.fertileWindowStart)} - {formatDate(results.fertileWindowEnd)}
+              </p>
+            </article>
+          </div>
+
+          <section className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                onClick={() => moveMonth(-1)}
+              >
+                Previous
+              </button>
+              <p className="text-base font-semibold text-slate-900">{formatMonth(displayedMonth)}</p>
+              <button
+                type="button"
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                onClick={() => moveMonth(1)}
+              >
+                Next
+              </button>
+            </div>
+
+            <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold uppercase text-slate-500">
+              {WEEKDAY_LABELS.map((label) => (
+                <div key={label} className="py-1">
+                  {label}
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-1 grid grid-cols-7 gap-1">
+              {monthDays.map((day) => {
+                const iso = dateToIso(day)
+                const predictionType = results.predictionMap.get(iso)
+                const isCurrentMonth = day.getUTCMonth() === displayedMonth.getUTCMonth()
+                const isSelected = selectedDateIso === iso
+
+                let cellClasses = 'border-slate-200 bg-white text-slate-800 hover:bg-slate-100'
+                if (predictionType === 'period') {
+                  cellClasses = 'border-red-300 bg-red-100 text-red-900 hover:bg-red-200'
+                } else if (predictionType === 'fertile') {
+                  cellClasses = 'border-emerald-300 bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
+                }
+
+                if (!isCurrentMonth) {
+                  cellClasses += ' opacity-50'
+                }
+
+                if (isSelected) {
+                  cellClasses += ' ring-2 ring-indigo-400'
+                }
+
+                return (
+                  <button
+                    key={iso}
+                    type="button"
+                    className={`h-11 rounded-md border text-sm font-medium transition ${cellClasses}`}
+                    onClick={() => setSelectedDateIso(iso)}
+                  >
+                    {day.getUTCDate()}
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-4 text-sm text-slate-700">
+              <div className="inline-flex items-center gap-2">
+                <span className="h-3 w-3 rounded-full bg-red-400" /> Period
+              </div>
+              <div className="inline-flex items-center gap-2">
+                <span className="h-3 w-3 rounded-full bg-emerald-400" /> Fertile
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-700">
+              {selectedDate && (
+                <>
+                  <p className="font-semibold text-slate-900">{formatDate(selectedDate)}</p>
+                  <p className="mt-1">
+                    {selectedDateType === 'period' && 'Predicted period day.'}
+                    {selectedDateType === 'fertile' && 'Predicted fertile window day.'}
+                    {!selectedDateType && 'No period or fertile prediction for this date.'}
+                  </p>
+                </>
+              )}
+              {!selectedDate && <p>Click a date to view details.</p>}
+            </div>
+          </section>
+        </>
       )}
     </section>
   )
