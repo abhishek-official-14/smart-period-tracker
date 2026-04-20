@@ -1,3 +1,5 @@
+import PeriodTracker from './components/PeriodTracker'
+
 function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -9,12 +11,7 @@ function App() {
       </header>
 
       <main className="mx-auto max-w-5xl px-4 py-8">
-        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="mb-2 text-lg font-semibold">Container</h2>
-          <p className="text-slate-600">
-            Frontend scaffold is ready with React + Vite + Tailwind CSS.
-          </p>
-        </section>
+        <PeriodTracker />
       </main>
     </div>
   )
